@@ -2,6 +2,7 @@
 
 TESTDIR="${TESTDIR:-~/awsv4tests}"
 DOWNLOADDIR="${TESTDIR}/downloads"
+LOGDIR="${TESTDIR}/logs-$(date -Iseconds)"
 CLI_BROKEN_VERSION="2.23.0"
 CLI_BASE_URL="https://awscli.amazonaws.com/awscli-exe-linux-x86_64"
 CLI_LATEST_URL="${CLI_BASE_URL}.zip"
@@ -17,6 +18,11 @@ LATEST_INSTALL_DIR="${LATEST_BASE_DIR}/install"
 
 BROKEN_AWS_BIN="${BROKEN_BIN_DIR}/aws"
 LATEST_AWS_BIN="${LATEST_BIN_DIR}/aws"
+
+TEST_LOG_FILE="${LOGDIR}/test.log"
+TEST_CLI_LOG_FILE="${LOGDIR}/cli.log"
+
+S3_BUCKET="s3v4checksumcheck"
 
 echo_err()
 {
@@ -50,6 +56,7 @@ setup_dir_tree()
 {
     mkdir -p "$TESTDIR"
     mkdir -p "$DOWNLOADDIR"
+    mkdir -p "$LOGDIR"
 }
 
 
@@ -84,11 +91,95 @@ setup_aws_cli()
     fi
 
     if ! "$BROKEN_AWS_BIN" --version > /dev/null 2>&1 ||
-       !  "$LATEST_AWS_BIN" --version > /dev/null 2>&1; then
+       ! "$LATEST_AWS_BIN" --version > /dev/null 2>&1; then
         install_aws_cli
     fi
 
     echo_err "AWS CLI setup valid, proceeding with checks!"
+}
+
+
+setup_bucket()
+{
+    local bucket_name=$1
+    local aws_bin="${2:-$LATEST_AWS_BIN}"
+
+    if [[ -z "$bucket_name" ]]; then
+       error_exit "No bucket provided! exiting!"
+    fi
+
+    if "$aws_bin" s3api head-bucket --bucket "$bucket_name" > /dev/null 2>&1; then
+        echo_err "using existing bucket $bucket_name"
+    else
+        echo_err "creating bucket $bucket_name"
+        if ! "$aws_bin" s3api create-bucket --bucket "$bucket_name"; then
+            error_exit "unable to create bucket!"
+        fi
+    fi
+}
+
+declare -a TEST_RESULTS
+log_fail()
+{
+    echo_err "FAIL ❌: $@"
+    TEST_RESULTS+=("FAIL: $@")
+}
+
+log_success()
+{
+    echo_err "SUCCESS ✅: $@"
+    TEST_RESULTS+=("SUCCESS: $@")
+}
+
+test_s3_ops()
+{
+    local bucket_name="${1}"
+    local aws_base_dir="${2}"
+    local aws_bin="${2}/bin/aws"
+    local object_key="test-single-object"
+    local dummy_obj="$TESTDIR/dummyobject"
+
+    cd "$aws_base_dir"
+    echo_err "Testing put object without env setting"
+    "$aws_bin" put-object --bucket="$bucket_name" --key "$object_key" --body "$dummy_obj" --debug >> "$CLI_LOG" 2>&1
+    if [[ $? -eq 0 ]]; then
+        log_success "s3api put-object passed with checksum verification (server fixed!) for $aws_bin"
+    else
+        log_fail "s3api put-object failed with checksum verification (server failed!) for $aws_bin"
+    fi
+
+    echo_err "Testing put object without env setting"
+    "$aws_bin" cp "$dummy_obj" s3://"$bucket_name"/"$object_key-cp" --debug >> "$CLI_LOG" 2>&1
+    if [[ $? -eq 0 ]]; then
+        log_success "s3 cp passed with checksum verification (server fixed!) for $aws_bin"
+    else
+        log_fail "s3 cp failed with checksum verification (server failed!) for $aws_bin"
+    fi
+
+    echo_err "Testing put object with env setting"
+    AWS_REQUEST_CHECKSUM_CALCULATION=WHEN_REQUIRED "$aws_bin" put-object --bucket="$bucket_name" --key "$object_key" --body "$dummy_obj" --debug >> "$CLI_LOG" 2>&1
+    if [[ $? -eq 0 ]]; then
+        log_success "s3api put-object passed without checksum verification (client fixed!) for $aws_bin"
+    else
+        log_fail "s3api put-object failed without checksum verification (client fix fail!!!!) for $aws_bin"
+    fi
+
+    echo_err "Testing put object with env setting"
+    AWS_REQUEST_CHECKSUM_CALCULATION=WHEN_REQUIRED  "$aws_bin" cp "$dummy_obj" s3://"$bucket_name"/"$object_key-cp" --debug >> "$CLI_LOG" 2>&1
+    if [[ $? -eq 0 ]]; then
+        log_success "s3 cp passed without checksum verification (client fixed!) for $aws_bin"
+    else
+        log_fail "s3 cp failed without checksum verification (client fix fail!!!!) for $aws_bin"
+    fi
+
+    echo_err "All tests competed for $aws_bin"
+}
+
+create_dummy_object()
+{
+    if [[ ! -f "$TESTDIR/dummyobject" ]]; then
+        dd if=/dev/zero of="$TESTDIR/dummyobject" bs=1M count=50
+    fi
 }
 
 main()
@@ -96,6 +187,10 @@ main()
     validate_endpoint_url
     setup_dir_tree
     setup_aws_cli
+    setup_bucket "$S3_BUCKET"
+    create_dummy_object
+    test_s3_ops "$S3_BUCKET" "$BROKEN_BASE_DIR"
+    test_s3_ops "$S3_BUCKET" "$LATEST_BASE_DIR"
 }
 
 main
