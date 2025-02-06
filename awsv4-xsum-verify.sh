@@ -20,7 +20,7 @@ BROKEN_AWS_BIN="${BROKEN_BIN_DIR}/aws"
 LATEST_AWS_BIN="${LATEST_BIN_DIR}/aws"
 
 TEST_LOG_FILE="${LOGDIR}/test.log"
-TEST_CLI_LOG_FILE="${LOGDIR}/cli.log"
+CLI_LOG_FILE="${LOGDIR}/cli.log"
 
 S3_BUCKET="s3v4checksumcheck"
 
@@ -121,27 +121,31 @@ setup_bucket()
 declare -a TEST_RESULTS
 log_fail()
 {
-    echo_err "FAIL ❌: $@"
+    local msg="FAIL: $@"
+    echo_err "❌ $msg"
     TEST_RESULTS+=("FAIL: $@")
+    echo "$msg" >> "$TEST_LOG_FILE"
+
 }
 
 log_success()
 {
-    echo_err "SUCCESS ✅: $@"
+    local msg="SUCCESS: $@"
+    echo_err "✅ $msg"
     TEST_RESULTS+=("SUCCESS: $@")
+    echo "$msg" >> "$TEST_LOG_FILE"
+
 }
 
 test_s3_ops()
 {
     local bucket_name="${1}"
-    local aws_base_dir="${2}"
-    local aws_bin="${2}/bin/aws"
+    local aws_bin="${2}"
     local object_key="test-single-object"
     local dummy_obj="$TESTDIR/dummyobject"
 
-    cd "$aws_base_dir"
     echo_err "Testing put object without env setting"
-    "$aws_bin" put-object --bucket="$bucket_name" --key "$object_key" --body "$dummy_obj" --debug >> "$CLI_LOG" 2>&1
+    "$aws_bin" s3api put-object --bucket="$bucket_name" --key "$object_key" --body "$dummy_obj" --debug >> "$CLI_LOG_FILE" 2>&1
     if [[ $? -eq 0 ]]; then
         log_success "s3api put-object passed with checksum verification (server fixed!) for $aws_bin"
     else
@@ -149,7 +153,7 @@ test_s3_ops()
     fi
 
     echo_err "Testing put object without env setting"
-    "$aws_bin" cp "$dummy_obj" s3://"$bucket_name"/"$object_key-cp" --debug >> "$CLI_LOG" 2>&1
+    "$aws_bin" s3 cp "$dummy_obj" s3://"$bucket_name"/"$object_key-cp" --debug >> "$CLI_LOG_FILE" 2>&1
     if [[ $? -eq 0 ]]; then
         log_success "s3 cp passed with checksum verification (server fixed!) for $aws_bin"
     else
@@ -157,7 +161,7 @@ test_s3_ops()
     fi
 
     echo_err "Testing put object with env setting"
-    AWS_REQUEST_CHECKSUM_CALCULATION=WHEN_REQUIRED "$aws_bin" put-object --bucket="$bucket_name" --key "$object_key" --body "$dummy_obj" --debug >> "$CLI_LOG" 2>&1
+    AWS_REQUEST_CHECKSUM_CALCULATION=WHEN_REQUIRED "$aws_bin" s3api put-object --bucket="$bucket_name" --key "$object_key" --body "$dummy_obj" --debug >> "$CLI_LOG_FILE" 2>&1
     if [[ $? -eq 0 ]]; then
         log_success "s3api put-object passed without checksum verification (client fixed!) for $aws_bin"
     else
@@ -165,7 +169,7 @@ test_s3_ops()
     fi
 
     echo_err "Testing put object with env setting"
-    AWS_REQUEST_CHECKSUM_CALCULATION=WHEN_REQUIRED  "$aws_bin" cp "$dummy_obj" s3://"$bucket_name"/"$object_key-cp" --debug >> "$CLI_LOG" 2>&1
+    AWS_REQUEST_CHECKSUM_CALCULATION=WHEN_REQUIRED  "$aws_bin" s3 cp "$dummy_obj" s3://"$bucket_name"/"$object_key-cp" --debug >> "$CLI_LOG_FILE" 2>&1
     if [[ $? -eq 0 ]]; then
         log_success "s3 cp passed without checksum verification (client fixed!) for $aws_bin"
     else
@@ -189,8 +193,8 @@ main()
     setup_aws_cli
     setup_bucket "$S3_BUCKET"
     create_dummy_object
-    test_s3_ops "$S3_BUCKET" "$BROKEN_BASE_DIR"
-    test_s3_ops "$S3_BUCKET" "$LATEST_BASE_DIR"
+    test_s3_ops "$S3_BUCKET" "$BROKEN_AWS_BIN"
+    test_s3_ops "$S3_BUCKET" "$LATEST_AWS_BIN"
 }
 
 main
